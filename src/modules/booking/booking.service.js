@@ -31,62 +31,75 @@ const MOCK_MOVIES = [
 
 export const getMockMovies = () => MOCK_MOVIES;
 
-// Get all seats from database (preserves starter code)
+// Equivalent to Seats.find() in mongoose
 export const getAllSeats = async () => {
   const result = await pool.query("SELECT * FROM seats ORDER BY id ASC");
   return result.rows;
 };
 
-// Book a seat with full SQL Transaction and Concurrency Row-Level Lock
+// Book a seat: exact transaction & row-level locking logic from class
 export const bookSeatWithTransaction = async ({ seatId, userId, userName, movieTitle = "Interstellar" }) => {
   if (!seatId) {
     throw ApiError.badRequest("Seat ID is required");
   }
 
-  const client = await pool.connect();
+  // pick a connection from the pool
+  const conn = await pool.connect();
 
   try {
-    // 1. Begin SQL Transaction
-    await client.query("BEGIN");
+    // begin transaction
+    // KEEP THE TRANSACTION AS SMALL AS POSSIBLE
+    await conn.query("BEGIN");
 
-    // 2. Concurrency Lock: Lock the row so concurrent requests queue up
-    const seatCheck = await client.query(
-      "SELECT * FROM seats WHERE id = $1 AND isbooked = 0 FOR UPDATE",
-      [seatId]
-    );
+    // getting the row to make sure it is not booked
+    // $1 is a variable which we are passing in the array as the second parameter of query function,
+    // Why do we use $1? -> this is to avoid SQL INJECTION
+    // (If you do ${id} directly in the query string,
+    // then it can be manipulated by the user to execute malicious SQL code)
+    const sql = "SELECT * FROM seats where id = $1 and isbooked = 0 FOR UPDATE";
+    const result = await conn.query(sql, [seatId]);
 
-    if (seatCheck.rowCount === 0) {
-      throw ApiError.conflict("Seat is already booked or does not exist");
+    // if no rows found then the operation should fail can't book
+    // This shows we Do not have the current seat available for booking
+    if (result.rowCount === 0) {
+      await conn.query("ROLLBACK");
+      conn.release();
+      throw ApiError.conflict("Seat already booked");
     }
 
-    // 3. Update the seats table (preserves starter behavior)
-    await client.query(
-      "UPDATE seats SET isbooked = 1, name = $1 WHERE id = $2",
-      [userName, seatId]
-    );
+    // if we get the row, we are safe to update
+    const sqlU = "update seats set isbooked = 1, name = $2 where id = $1";
+    await conn.query(sqlU, [seatId, userName]);
 
-    // 4. Create the booking entry linked to the authenticated user
-    const bookingResult = await client.query(
-      `INSERT INTO bookings (user_id, seat_id, movie_title)
-       VALUES ($1, $2, $3)
-       RETURNING id, user_id, seat_id, movie_title, booked_at`,
-      [userId, seatId, movieTitle]
-    );
+    // Insert record in bookings table linking to the authenticated user
+    const sqlB = `INSERT INTO bookings (user_id, seat_id, movie_title)
+                  VALUES ($1, $2, $3)
+                  RETURNING id, user_id, seat_id, movie_title, booked_at`;
+    const bookingResult = await conn.query(sqlB, [userId, seatId, movieTitle]);
 
-    // 5. Commit transaction
-    await client.query("COMMIT");
+    // end transaction by committing
+    await conn.query("COMMIT");
+    // release the connection back to the pool (so we do not keep the connection open unnecessarily)
+    conn.release();
 
     return {
       booking: bookingResult.rows[0],
-      seat: { id: seatId, isbooked: 1, bookedBy: userName },
+      seat: { id: seatId, isbooked: 1, name: userName },
     };
-  } catch (error) {
-    // Rollback any changes if something fails
-    await client.query("ROLLBACK");
-    throw error;
+  } catch (ex) {
+    await conn.query("ROLLBACK"); // Roll back if any error occurs
+    if (ex instanceof ApiError) {
+      throw ex;
+    }
+    console.error("Booking error:", ex);
+    throw ApiError.internal("Internal Server Error");
   } finally {
-    // Always release client connection back to pool
-    client.release();
+    // ALWAYS release the connection back to the pool
+    try {
+      conn.release();
+    } catch (e) {
+      // already released
+    }
   }
 };
 
@@ -103,31 +116,36 @@ export const getUserBookings = async (userId) => {
   return result.rows;
 };
 
-// Legacy starter route compatibility: PUT /:id/:name
+// Legacy starter route compatibility: PUT /:id/:name (matching tutor's original code)
 export const legacyBookSeat = async (id, name) => {
-  const client = await pool.connect();
+  const conn = await pool.connect();
   try {
-    await client.query("BEGIN");
-    const result = await client.query(
-      "SELECT * FROM seats WHERE id = $1 AND isbooked = 0 FOR UPDATE",
-      [id]
-    );
+    await conn.query("BEGIN");
+    const sql = "SELECT * FROM seats where id = $1 and isbooked = 0 FOR UPDATE";
+    const result = await conn.query(sql, [id]);
 
     if (result.rowCount === 0) {
+      await conn.query("ROLLBACK");
+      conn.release();
       throw ApiError.conflict("Seat already booked");
     }
 
-    const updateResult = await client.query(
-      "UPDATE seats SET isbooked = 1, name = $2 WHERE id = $1 RETURNING *",
-      [id, name]
-    );
+    const sqlU = "update seats set isbooked = 1, name = $2 where id = $1 RETURNING *";
+    const updateResult = await conn.query(sqlU, [id, name]);
 
-    await client.query("COMMIT");
+    await conn.query("COMMIT");
+    conn.release();
     return updateResult.rows[0];
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
+  } catch (ex) {
+    await conn.query("ROLLBACK");
+    if (ex instanceof ApiError) {
+      throw ex;
+    }
+    console.error("Booking error:", ex);
+    throw ApiError.internal("Internal Server Error");
   } finally {
-    client.release();
+    try {
+      conn.release();
+    } catch (e) {}
   }
 };
