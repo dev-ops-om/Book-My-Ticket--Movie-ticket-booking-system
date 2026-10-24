@@ -1,10 +1,15 @@
 # 🎟️ Book My Ticket - Movie Ticket Booking Platform
 
+[![Live Portal](https://img.shields.io/badge/Live%20Portal-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://book-my-ticket-movie-ticket-booking.onrender.com/)
 [![Node.js](https://img.shields.io/badge/Node.js-v18%2B-green.svg)](https://nodejs.org/)
 [![Express.js](https://img.shields.io/badge/Express-5.x-lightgrey.svg)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Supabase-blue.svg)](https://supabase.com/)
 [![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-brightgreen.svg)](https://www.mongodb.com/atlas)
 [![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-v3-38bdf8.svg)](https://tailwindcss.com/)
+
+> 🌐 **Live Web Application**: [https://book-my-ticket-movie-ticket-booking.onrender.com](https://book-my-ticket-movie-ticket-booking.onrender.com/)  
+> 🔑 **Instant Demo Account**: Email: `demo@bookmyticket.com` | Password: `Password@123` *(Or register any account in 5 seconds)*  
+> ⏳ *(Note: Render free tier instances take ~30-50 seconds to wake up on the first visit if inactive).*
 
 A production-grade, concurrency-safe movie ticket booking application developed for the **Chai Aur SQL Hackathon** based on the official starter codebase ([`chaicodehq/book-my-ticket`](https://github.com/chaicodehq/book-my-ticket)).
 
