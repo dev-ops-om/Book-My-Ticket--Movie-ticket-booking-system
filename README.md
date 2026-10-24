@@ -1,103 +1,139 @@
 ﻿# Book My Ticket - Movie Ticket Booking Platform
 
-A PostgreSQL-backed movie ticket booking backend developed as a follow-up assignment to the **Chai Aur SQL** class.
+A pure PostgreSQL movie ticket booking full-stack application developed as a follow-up assignment to the **Chai Aur SQL** class.
 
-This project extends the official starter code (`chaicodehq/book-my-ticket`) with a Pure SQL authentication system and concurrency-safe, protected seat booking flows.
+Built upon the official starter code (`chaicodehq/book-my-ticket`), this project implements a complete relational schema, pure SQL authentication, concurrency-safe seat booking using row-level locking, and a modern, responsive light-theme UI.
 
 ---
 
-## Features Implemented
+## 🏛️ Database Schema (ER Diagram)
 
-1. **Base Endpoints Preserved**:
-   - `GET /`: Serves the visual seat map frontend (`index.html`).
-   - `GET /seats`: Returns all seats and booking statuses.
-   - `PUT /:id/:name`: Legacy booking endpoint from starter code maintained for backwards compatibility.
+The relational schema matches the architecture designed for this platform:
+
+```mermaid
+erDiagram
+    users ||--o{ seats : "books"
+    users ||--o{ bookings : "has"
+    seats ||--o{ bookings : "referenced in"
+    movies ||--o{ bookings : "featured in"
+
+    users {
+        serial id PK
+        varchar name
+        varchar email UK
+        varchar password
+        varchar reset_token
+        timestamp reset_token_expires_at
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    movies {
+        serial id PK
+        varchar title UK
+        varchar language
+        int duration
+        varchar poster_url
+        timestamp created_at
+    }
+
+    seats {
+        serial id PK
+        varchar name
+        int isbooked
+        int user_id FK
+        timestamp booked_at
+        timestamp updated_at
+    }
+
+    bookings {
+        serial id PK
+        int user_id FK
+        int seat_id FK
+        int movie_id FK
+        varchar status
+        timestamp booked_at
+    }
+```
+
+---
+
+## ✨ Features Implemented
+
+1. **Light-Theme Frontend Interface**:
+   - Modern, clean aesthetic with Plus Jakarta Sans typography and indigo accents.
+   - **Authentication Modal**: Tabbed interface for Sign In, Registration, and Password Reset.
+   - **Movie Selection**: Interactive movie cards displaying posters, languages, and durations.
+   - **Live Seat Map**: Visual screen orientation, interactive 20-seat matrix with real-time status (Available, Selected, Booked).
+   - **Ticket Drawer ("My Bookings")**: Displays user's booked tickets with movie details, seat numbers, and timestamps.
 
 2. **Pure SQL Authentication**:
-   - `POST /api/auth/register`: Creates new user account in PostgreSQL with bcrypt password hashing.
-   - `POST /api/auth/login`: Authenticates credentials and returns a signed JWT access token.
-   - `GET /api/auth/me`: Protected profile endpoint returning the authenticated user.
+   - `POST /api/auth/register`: Creates new account in PostgreSQL with bcrypt password hashing.
+   - `POST /api/auth/login`: Authenticates user credentials and returns signed JWT access token.
+   - `POST /api/auth/forgot-password`: Generates timed reset token (15-minute expiry).
+   - `POST /api/auth/reset-password`: Validates reset token and updates password.
+   - `GET /api/auth/me`: Protected profile endpoint.
 
 3. **Concurrency-Safe Seat Booking**:
    - `POST /api/bookings`: Protected with `authenticate` middleware.
-   - Prevents race conditions and double-bookings using PostgreSQL row-level locking (`SELECT ... FOR UPDATE`) within an ACID transaction (`BEGIN ... COMMIT / ROLLBACK`).
-   - Associates every booked seat with the authenticated `user_id` inside a dedicated `bookings` relational table.
+   - Prevents race conditions and double-booking using PostgreSQL row-level locks (`SELECT ... FOR UPDATE`) inside an ACID transaction (`BEGIN ... COMMIT / ROLLBACK`).
+   - Associates every booked seat with `user_id` and `movie_id`.
 
-4. **User Booking History**:
-   - `GET /api/bookings/my-bookings`: Returns all tickets booked by the logged-in user using SQL `JOIN`.
-
-5. **Mock Movie Catalog**:
-   - `GET /api/movies`: Returns mock movie data (titles, genres, showtimes, and poster URLs).
-
----
-
-## Database Architecture
-
-The system runs entirely on **PostgreSQL** without external ORMs or document databases:
-
-- **`seats`**: `id` (PK), `name` (VARCHAR), `isbooked` (INT).
-- **`users`**: `id` (PK), `name` (VARCHAR), `email` (VARCHAR UNIQUE), `password_hash` (TEXT), `created_at` (TIMESTAMP).
-- **`bookings`**: `id` (PK), `user_id` (FK to `users`), `seat_id` (FK to `seats`), `movie_title` (VARCHAR), `booked_at` (TIMESTAMP).
-
-*Tables and starter seats are automatically created on server startup via `initDB()` in `src/common/config/db.js`.*
+4. **Preserved Starter Endpoints**:
+   - `GET /`: Serves the frontend application.
+   - `GET /seats`: Returns all seats and statuses.
+   - `PUT /:id/:name`: Legacy starter route maintained for backwards compatibility.
 
 ---
 
-## API Reference
+## 📡 API Reference
 
-### Public Routes
+### Public Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/` | Visual seat map UI |
-| `GET` | `/seats` | Get all seats and statuses |
-| `GET` | `/api/movies` | Get mock movie list |
-| `GET` | `/health` | Service health check |
-| `POST` | `/api/auth/register` | Register new account (`name`, `email`, `password`) |
-| `POST` | `/api/auth/login` | Login and get Bearer token (`email`, `password`) |
-| `PUT` | `/:id/:name` | Legacy booking route |
+| `GET` | `/` | Serves web interface |
+| `GET` | `/seats` | Get all seats and booking statuses |
+| `GET` | `/api/movies` | Fetch list of available movies |
+| `GET` | `/health` | Service uptime and health check |
+| `POST` | `/api/auth/register` | Register new user account |
+| `POST` | `/api/auth/login` | Login and obtain JWT token |
+| `POST` | `/api/auth/forgot-password`| Generate password reset token |
+| `POST` | `/api/auth/reset-password` | Set new password with valid token |
+| `PUT` | `/:id/:name` | Starter legacy booking route |
 
-### Protected Routes (Requires Header: `Authorization: Bearer <token>`)
+### Protected Endpoints (Requires `Authorization: Bearer <token>`)
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/auth/me` | Fetch authenticated user profile |
-| `POST` | `/api/bookings` | Book a seat (`seatId`, `movieTitle`) |
-| `GET` | `/api/bookings/my-bookings` | View current user's booked tickets |
+| `GET` | `/api/auth/me` | Current authenticated user profile |
+| `POST` | `/api/bookings` | Book a seat (`seatId`, `movieId`) |
+| `GET` | `/api/bookings/my-bookings` | Fetch user's booking history |
 
 ---
 
-## Local Setup
+## 🚀 Local Setup
 
-### Prerequisites
-- Node.js (v18+)
-- PostgreSQL database (Local or free cloud database on [Neon.tech](https://neon.tech))
-
-### 1. Clone & Install Dependencies
+### 1. Clone & Install
 ```bash
 git clone <your-repo-url>
 cd BookMyTicket
 npm install
 ```
 
-### 2. Environment Configuration
-Copy `env.example` to `.env`:
-```bash
-cp env.example .env
-```
-
-Update your `DATABASE_URL` in `.env`:
+### 2. Environment Variables
+Create `.env` from `env.example`:
 ```env
 PORT=8080
 NODE_ENV=development
-DATABASE_URL=postgresql://user:password@ep-xyz.neon.tech/neondb?sslmode=require
-JWT_SECRET=your_jwt_secret_key
+DATABASE_URL=postgresql://neondb_owner:YOUR_PASSWORD@YOUR_NEON_HOST/neondb?sslmode=require
+JWT_SECRET=super_secret_jwt_key_chai_code_sql_hackathon
 JWT_EXPIRES_IN=7d
 ```
 
-### 3. Start the Server
+### 3. Run Development Server
 ```bash
 npm run dev
 ```
 
-The server will automatically connect to PostgreSQL, verify all tables, seed 20 seats if empty, and listen on `http://localhost:8080`.
+The database tables and starter seats/movies are verified and seeded automatically on first boot. Open `http://localhost:8080` in your browser.
