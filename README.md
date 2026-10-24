@@ -178,31 +178,3 @@ node server.js
 
 The application will automatically connect to MongoDB Atlas and Supabase PostgreSQL, create the `seats` table if missing, seed 20 seats, and launch on:
 👉 **`http://localhost:8080`**
-
----
-
-## ☁️ Deployment Guide (Render)
-
-1. Fork or push this repository to GitHub.
-2. Log in to [Render](https://render.com) and click **New + > Web Service**.
-3. Select your repository: `Book-My-Ticket--Movie-ticket-booking-system`.
-4. Configure service details:
-   - **Environment**: `Node`
-   - **Build Command**: `npm install`
-   - **Start Command**: `npm start`
-   - **Plan**: `Free`
-5. Under **Environment Variables**, add the keys defined in `.env` (`MONGODB_URI`, `DATABASE_URL`, `JWT_ACCESS_SECRET`, etc.).
-6. Click **Create Web Service**. Render will deploy your application with a public HTTPS URL.
-
----
-
-## 🏆 Hackathon Guidelines Compliance Checklist
-
-- [x] Starter source code (`chaicodehq/book-my-ticket`) used as foundation.
-- [x] All existing endpoints preserved (`/`, `/seats`, `PUT /:id/:name`).
-- [x] Complete authentication layer implemented (`/api/auth/register`, `/api/auth/login`).
-- [x] Booking endpoint protected with `authenticate` JWT middleware.
-- [x] Concurrency row-level locking (`FOR UPDATE`) strictly prevents double-booking.
-- [x] Bookings associated with authenticated users.
-- [x] Clean, structured, and modular codebase.
-- [x] Full documentation, architectural flowcharts, and ER diagrams included.
