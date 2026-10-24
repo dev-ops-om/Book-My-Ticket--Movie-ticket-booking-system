@@ -6,12 +6,12 @@ import ApiResponse from "../../common/utils/api-response.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, "../../../public");
 
-// 1. Serve starter HTML page
+// 1. Serve frontend HTML
 export const serveIndexHtml = (req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 };
 
-// 2. GET /seats (Starter route preserved)
+// 2. GET /seats (Starter code preserved)
 export const getSeats = async (req, res, next) => {
   try {
     const seats = await bookingService.getAllSeats();
@@ -21,21 +21,25 @@ export const getSeats = async (req, res, next) => {
   }
 };
 
-// 3. GET /api/movies (Mock movie list)
-export const getMovies = (req, res) => {
-  const movies = bookingService.getMockMovies();
-  return ApiResponse.ok(res, "Mock movies fetched successfully", movies);
+// 3. GET /api/movies (Movies from PostgreSQL)
+export const getMovies = async (req, res, next) => {
+  try {
+    const movies = await bookingService.getAllMovies();
+    return ApiResponse.ok(res, "Movies fetched successfully", movies);
+  } catch (error) {
+    next(error);
+  }
 };
 
 // 4. POST /api/bookings (Protected booking endpoint)
 export const bookSeat = async (req, res, next) => {
   try {
-    const { seatId, movieTitle } = req.body;
+    const { seatId, movieId } = req.body;
     const result = await bookingService.bookSeatWithTransaction({
       seatId: Number(seatId),
+      movieId: movieId ? Number(movieId) : undefined,
       userId: req.user.id,
       userName: req.user.name,
-      movieTitle: movieTitle || "Interstellar",
     });
 
     return ApiResponse.created(res, "Seat booked successfully!", result);
@@ -44,7 +48,7 @@ export const bookSeat = async (req, res, next) => {
   }
 };
 
-// 5. GET /api/bookings/my-bookings (User's booked seats)
+// 5. GET /api/bookings/my-bookings (User's booking history)
 export const getMyBookings = async (req, res, next) => {
   try {
     const bookings = await bookingService.getUserBookings(req.user.id);

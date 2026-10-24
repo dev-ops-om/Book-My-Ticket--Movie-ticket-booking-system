@@ -2,8 +2,7 @@
 import pg from "pg";
 import "dotenv/config";
 
-// DNS Fallback: Resolves ENOTFOUND when local Wi-Fi / ISP DNS servers
-// fail to resolve Neon dynamic AWS cloud domains (*.aws.neon.tech)
+// Fallback DNS resolver to bypass local Wi-Fi DNS restrictions
 const resolver = new dns.Resolver();
 resolver.setServers(["8.8.8.8", "1.1.1.1"]);
 const originalLookup = dns.lookup;
@@ -26,56 +25,107 @@ dns.lookup = (hostname, options, callback) => {
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false, // Required for cloud providers like Neon/Supabase/Render
+    rejectUnauthorized: false,
   },
   max: 10,
 });
 
-// Automatically initialize tables and seed starter seats on startup
+// Initialize PostgreSQL schema matching ER diagram
 export const initDB = async () => {
   const client = await pool.connect();
   try {
-    // 1. Seats table (from starter code)
+    // 1. Users table (ER diagram compliant)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        reset_token VARCHAR(255),
+        reset_token_expires_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // Clean up users columns to match ER diagram exactly
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS password VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires_at TIMESTAMP;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+      ALTER TABLE users DROP COLUMN IF EXISTS password_hash;
+    `);
+
+    // 2. Movies table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS movies (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255) UNIQUE NOT NULL,
+        language VARCHAR(100) DEFAULT 'English',
+        duration INT DEFAULT 150,
+        poster_url VARCHAR(500),
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // 3. Seats table
     await client.query(`
       CREATE TABLE IF NOT EXISTS seats (
         id SERIAL PRIMARY KEY,
         name VARCHAR(255),
-        isbooked INT DEFAULT 0
+        isbooked INT DEFAULT 0,
+        user_id INT REFERENCES users(id) ON DELETE SET NULL,
+        booked_at TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    // 2. Seed 20 seats if table is empty
+    // Ensure seats columns exist (migrations)
     await client.query(`
-      INSERT INTO seats (isbooked)
-      SELECT 0
-      FROM generate_series(1, 20)
-      WHERE NOT EXISTS (SELECT 1 FROM seats);
+      ALTER TABLE seats ADD COLUMN IF NOT EXISTS user_id INT REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE seats ADD COLUMN IF NOT EXISTS booked_at TIMESTAMP;
+      ALTER TABLE seats ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     `);
 
-    // 3. Users table (for authentication)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(120) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        role VARCHAR(50) DEFAULT 'customer',
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-      );
-    `);
-
-    // 4. Bookings table (associating logged-in users with booked seats)
+    // 4. Bookings table
     await client.query(`
       CREATE TABLE IF NOT EXISTS bookings (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        seat_id INTEGER NOT NULL REFERENCES seats(id) ON DELETE CASCADE,
-        movie_title VARCHAR(255) DEFAULT 'Interstellar (Mock)',
-        booked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        user_id INT REFERENCES users(id) ON DELETE CASCADE,
+        seat_id INT REFERENCES seats(id) ON DELETE CASCADE,
+        movie_id INT REFERENCES movies(id) ON DELETE CASCADE,
+        status VARCHAR(50) DEFAULT 'booked',
+        booked_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    console.log("PostgreSQL database tables verified and initialized.");
+    // Ensure bookings columns exist (migrations)
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS movie_id INT REFERENCES movies(id) ON DELETE CASCADE;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'booked';
+    `);
+
+    // 5. Seed starter seats (20 seats) if table is empty
+    await client.query(`
+      INSERT INTO seats (name, isbooked)
+      SELECT 'Seat ' || i, 0
+      FROM generate_series(1, 20) AS i
+      WHERE NOT EXISTS (SELECT 1 FROM seats);
+    `);
+
+    // 6. Seed mock movies if table is empty
+    await client.query(`
+      INSERT INTO movies (title, language, duration, poster_url)
+      VALUES
+        ('Interstellar', 'English', 169, 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=600&auto=format'),
+        ('Inception', 'English', 148, 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format'),
+        ('Dune: Part Two', 'English', 166, 'https://images.unsplash.com/photo-1440404653325-ab127d49abc1?w=600&auto=format'),
+        ('The Dark Knight', 'English', 152, 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&auto=format')
+      ON CONFLICT (title) DO NOTHING;
+    `);
+
+    console.log("PostgreSQL schema matching ER diagram initialized successfully.");
   } finally {
     client.release();
   }

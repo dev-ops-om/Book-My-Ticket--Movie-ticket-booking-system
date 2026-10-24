@@ -1,114 +1,105 @@
 ﻿import pool from "../../common/config/db.js";
 import ApiError from "../../common/utils/api-error.js";
 
-// Mock movie data for the hackathon
-const MOCK_MOVIES = [
-  {
-    id: "m-101",
-    title: "Interstellar",
-    genre: "Sci-Fi / Adventure",
-    duration: "169 min",
-    showtimes: ["14:00", "18:00", "21:30"],
-    poster: "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=500&auto=format",
-  },
-  {
-    id: "m-102",
-    title: "Inception",
-    genre: "Action / Sci-Fi",
-    duration: "148 min",
-    showtimes: ["15:30", "19:00", "22:15"],
-    poster: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=500&auto=format",
-  },
-  {
-    id: "m-103",
-    title: "Dune: Part Two",
-    genre: "Sci-Fi / Drama",
-    duration: "166 min",
-    showtimes: ["13:00", "17:15", "20:45"],
-    poster: "https://images.unsplash.com/photo-1440404653325-ab127d49abc1?w=500&auto=format",
-  },
-];
-
-export const getMockMovies = () => MOCK_MOVIES;
-
-// Equivalent to Seats.find() in mongoose
-export const getAllSeats = async () => {
-  const result = await pool.query("SELECT * FROM seats ORDER BY id ASC");
+// 1. Get all movies from PostgreSQL
+export const getAllMovies = async () => {
+  const result = await pool.query("SELECT * FROM movies ORDER BY id ASC");
   return result.rows;
 };
 
-// Book a seat: exact transaction & row-level locking logic from class
-export const bookSeatWithTransaction = async ({ seatId, userId, userName, movieTitle = "Interstellar" }) => {
+// 2. Get all seats from PostgreSQL (matching starter GET /seats)
+export const getAllSeats = async () => {
+  const result = await pool.query(
+    "SELECT id, name, isbooked, user_id, booked_at FROM seats ORDER BY id ASC"
+  );
+  return result.rows;
+};
+
+// 3. Book a seat with Row-Level Lock & Transaction (ER diagram compliant)
+export const bookSeatWithTransaction = async ({ seatId, movieId, userId, userName }) => {
   if (!seatId) {
     throw ApiError.badRequest("Seat ID is required");
   }
 
-  // pick a connection from the pool
+  // Pick a connection from the pool
   const conn = await pool.connect();
 
   try {
-    // begin transaction
-    // KEEP THE TRANSACTION AS SMALL AS POSSIBLE
+    // Begin transaction (KEEP THE TRANSACTION AS SMALL AS POSSIBLE)
     await conn.query("BEGIN");
 
-    // getting the row to make sure it is not booked
-    // $1 is a variable which we are passing in the array as the second parameter of query function,
-    // Why do we use $1? -> this is to avoid SQL INJECTION
-    // (If you do ${id} directly in the query string,
-    // then it can be manipulated by the user to execute malicious SQL code)
-    const sql = "SELECT * FROM seats where id = $1 and isbooked = 0 FOR UPDATE";
-    const result = await conn.query(sql, [seatId]);
+    // 1. Row-level lock: ensure seat is not booked
+    // $1 placeholder prevents SQL injection
+    const seatSql = "SELECT * FROM seats WHERE id = $1 AND isbooked = 0 FOR UPDATE";
+    const seatResult = await conn.query(seatSql, [seatId]);
 
-    // if no rows found then the operation should fail can't book
-    // This shows we Do not have the current seat available for booking
-    if (result.rowCount === 0) {
+    if (seatResult.rowCount === 0) {
       await conn.query("ROLLBACK");
       conn.release();
-      throw ApiError.conflict("Seat already booked");
+      throw ApiError.conflict("Seat is already booked");
     }
 
-    // if we get the row, we are safe to update
-    const sqlU = "update seats set isbooked = 1, name = $2 where id = $1";
-    await conn.query(sqlU, [seatId, userName]);
+    // 2. Verify movie exists or fallback to first movie
+    let targetMovieId = movieId;
+    if (!targetMovieId) {
+      const firstMovie = await conn.query("SELECT id FROM movies LIMIT 1");
+      targetMovieId = firstMovie.rows[0]?.id;
+    }
 
-    // Insert record in bookings table linking to the authenticated user
-    const sqlB = `INSERT INTO bookings (user_id, seat_id, movie_title)
-                  VALUES ($1, $2, $3)
-                  RETURNING id, user_id, seat_id, movie_title, booked_at`;
-    const bookingResult = await conn.query(sqlB, [userId, seatId, movieTitle]);
+    // 3. Update seats table: set isbooked = 1, user_id, name, booked_at
+    const updateSeatSql = `
+      UPDATE seats
+      SET isbooked = 1, user_id = $2, name = $3, booked_at = NOW(), updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `;
+    const updatedSeat = await conn.query(updateSeatSql, [seatId, userId, userName]);
 
-    // end transaction by committing
+    // 4. Insert into bookings table (linking user_id, seat_id, movie_id)
+    const bookingSql = `
+      INSERT INTO bookings (user_id, seat_id, movie_id, status, booked_at)
+      VALUES ($1, $2, $3, 'booked', NOW())
+      RETURNING id, user_id, seat_id, movie_id, status, booked_at
+    `;
+    const bookingResult = await conn.query(bookingSql, [userId, seatId, targetMovieId]);
+
+    // Commit transaction
     await conn.query("COMMIT");
-    // release the connection back to the pool (so we do not keep the connection open unnecessarily)
     conn.release();
 
     return {
       booking: bookingResult.rows[0],
-      seat: { id: seatId, isbooked: 1, name: userName },
+      seat: updatedSeat.rows[0],
     };
   } catch (ex) {
-    await conn.query("ROLLBACK"); // Roll back if any error occurs
-    if (ex instanceof ApiError) {
-      throw ex;
-    }
+    await conn.query("ROLLBACK");
+    if (ex instanceof ApiError) throw ex;
     console.error("Booking error:", ex);
     throw ApiError.internal("Internal Server Error");
   } finally {
-    // ALWAYS release the connection back to the pool
     try {
       conn.release();
-    } catch (e) {
-      // already released
-    }
+    } catch (e) {}
   }
 };
 
-// Get all bookings made by the logged-in user
+// 4. Get all bookings for the authenticated user
 export const getUserBookings = async (userId) => {
   const result = await pool.query(
-    `SELECT b.id AS booking_id, b.seat_id, b.movie_title, b.booked_at, s.name AS seat_label
+    `SELECT
+       b.id AS booking_id,
+       b.status,
+       b.booked_at,
+       s.id AS seat_id,
+       s.name AS seat_name,
+       m.id AS movie_id,
+       m.title AS movie_title,
+       m.language AS movie_language,
+       m.duration AS movie_duration,
+       m.poster_url AS movie_poster
      FROM bookings b
      JOIN seats s ON b.seat_id = s.id
+     JOIN movies m ON b.movie_id = m.id
      WHERE b.user_id = $1
      ORDER BY b.booked_at DESC`,
     [userId]
@@ -116,12 +107,12 @@ export const getUserBookings = async (userId) => {
   return result.rows;
 };
 
-// Legacy starter route compatibility: PUT /:id/:name (matching tutor's original code)
+// 5. Starter code backward-compatibility: PUT /:id/:name
 export const legacyBookSeat = async (id, name) => {
   const conn = await pool.connect();
   try {
     await conn.query("BEGIN");
-    const sql = "SELECT * FROM seats where id = $1 and isbooked = 0 FOR UPDATE";
+    const sql = "SELECT * FROM seats WHERE id = $1 AND isbooked = 0 FOR UPDATE";
     const result = await conn.query(sql, [id]);
 
     if (result.rowCount === 0) {
@@ -130,7 +121,12 @@ export const legacyBookSeat = async (id, name) => {
       throw ApiError.conflict("Seat already booked");
     }
 
-    const sqlU = "update seats set isbooked = 1, name = $2 where id = $1 RETURNING *";
+    const sqlU = `
+      UPDATE seats
+      SET isbooked = 1, name = $2, booked_at = NOW(), updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `;
     const updateResult = await conn.query(sqlU, [id, name]);
 
     await conn.query("COMMIT");
@@ -138,9 +134,7 @@ export const legacyBookSeat = async (id, name) => {
     return updateResult.rows[0];
   } catch (ex) {
     await conn.query("ROLLBACK");
-    if (ex instanceof ApiError) {
-      throw ex;
-    }
+    if (ex instanceof ApiError) throw ex;
     console.error("Booking error:", ex);
     throw ApiError.internal("Internal Server Error");
   } finally {

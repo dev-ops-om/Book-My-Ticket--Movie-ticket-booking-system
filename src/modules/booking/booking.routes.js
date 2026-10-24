@@ -9,7 +9,7 @@ router.get("/", controller.serveIndexHtml);
 router.get("/seats", controller.getSeats);
 router.put("/:id/:name", controller.legacyBookSeat);
 
-// New & Protected API routes
+// Feature routes
 router.get("/api/movies", controller.getMovies);
 router.post("/api/bookings", authenticate, controller.bookSeat);
 router.get("/api/bookings/my-bookings", authenticate, controller.getMyBookings);
