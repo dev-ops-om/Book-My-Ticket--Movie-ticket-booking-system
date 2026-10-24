@@ -1,31 +1,35 @@
-﻿import pg from "pg";
+﻿import dns from "node:dns";
+import pg from "pg";
 import "dotenv/config";
 
-const isProduction = process.env.NODE_ENV === "production";
-const connectionString = process.env.DATABASE_URL;
-
-const poolConfig = connectionString
-  ? {
-      connectionString,
-      ssl: connectionString.includes("sslmode=require") || isProduction
-        ? { rejectUnauthorized: false }
-        : false,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+// DNS Fallback: Resolves ENOTFOUND when local Wi-Fi / ISP DNS servers
+// fail to resolve Neon dynamic AWS cloud domains (*.aws.neon.tech)
+const resolver = new dns.Resolver();
+resolver.setServers(["8.8.8.8", "1.1.1.1"]);
+const originalLookup = dns.lookup;
+dns.lookup = (hostname, options, callback) => {
+  if (typeof options === "function") {
+    callback = options;
+    options = {};
+  }
+  resolver.resolve4(hostname, (err, addresses) => {
+    if (!err && addresses && addresses.length > 0) {
+      if (options && options.all) {
+        return callback(null, addresses.map((a) => ({ address: a, family: 4 })));
+      }
+      return callback(null, addresses[0], 4);
     }
-  : {
-      host: process.env.PGHOST || "localhost",
-      port: Number(process.env.PGPORT) || 5432,
-      user: process.env.PGUSER || "postgres",
-      password: process.env.PGPASSWORD || "postgres",
-      database: process.env.PGDATABASE || "book_my_ticket",
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
-    };
+    originalLookup(hostname, options, callback);
+  });
+};
 
-const pool = new pg.Pool(poolConfig);
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false, // Required for cloud providers like Neon/Supabase/Render
+  },
+  max: 10,
+});
 
 // Automatically initialize tables and seed starter seats on startup
 export const initDB = async () => {
