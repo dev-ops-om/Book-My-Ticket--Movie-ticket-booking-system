@@ -138,8 +138,8 @@ NODE_ENV=development
 # 1. MongoDB Atlas (Users & Auth)
 MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/book_my_ticket?authSource=admin&retryWrites=true&w=majority
 
-# 2. PostgreSQL (Supabase / Neon - Seat Concurrency)
-DATABASE_URL=postgresql://<username>:<password>@db.xxxxx.supabase.co:5432/postgres
+# 2. PostgreSQL (Supabase IPv4 Pooler - Render compatible)
+DATABASE_URL=postgresql://postgres.<project_ref>:<password>@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
 
 # 3. JWT Configuration
 JWT_ACCESS_SECRET=your_super_secret_access_key
