@@ -1,152 +1,130 @@
-﻿import crypto from "crypto";
-import bcrypt from "bcryptjs";
-import pool from "../../common/config/db.js";
+﻿import User from "./auth.model.js";
 import ApiError from "../../common/utils/api-error.js";
-import { generateToken } from "../../common/utils/jwt.js";
+import {
+  generateResetToken,
+  hashToken,
+  generateAccessToken,
+  generateRefreshToken,
+  verifyRefreshToken,
+} from "../../common/utils/jwt.utils.js";
+import { sendVerificationEmail, sendResetPasswordEmail } from "../../common/config/email.js";
 
-// 1. Register User (matching ER diagram: users table)
-export const registerUser = async ({ name, email, password }) => {
-  if (!name || !email || !password) {
-    throw ApiError.badRequest("Name, email, and password are required");
+export const register = async ({ name, email, password }) => {
+  const existing = await User.findOne({ email });
+  if (existing) throw ApiError.conflict("Email is already registered");
+
+  const { rawToken, hashedToken } = generateResetToken();
+
+  const user = await User.create({
+    name,
+    email,
+    password,
+    verificationToken: hashedToken,
+  });
+
+  try {
+    await sendVerificationEmail(email, rawToken);
+  } catch (err) {
+    console.error("Failed to send verification email:", err.message);
   }
 
-  if (password.length < 6) {
-    throw ApiError.badRequest("Password must be at least 6 characters long");
-  }
+  const userObj = user.toObject();
+  delete userObj.password;
+  delete userObj.verificationToken;
 
-  const cleanEmail = email.toLowerCase().trim();
-
-  // Check if email already exists
-  const existing = await pool.query("SELECT id FROM users WHERE email = $1", [cleanEmail]);
-  if (existing.rows.length > 0) {
-    throw ApiError.conflict("Email is already registered");
-  }
-
-  // Hash password
-  const passwordHash = await bcrypt.hash(password, 12);
-
-  // Insert user
-  const result = await pool.query(
-    `INSERT INTO users (name, email, password)
-     VALUES ($1, $2, $3)
-     RETURNING id, name, email, created_at`,
-    [name.trim(), cleanEmail, passwordHash]
-  );
-
-  const user = result.rows[0];
-  const token = generateToken({ id: user.id, name: user.name, email: user.email });
-
-  return { user, token };
+  return userObj;
 };
 
-// 2. Login User
-export const loginUser = async ({ email, password }) => {
-  if (!email || !password) {
-    throw ApiError.badRequest("Email and password are required");
-  }
+export const verifyEmail = async (token) => {
+  const hashedInput = hashToken(String(token).trim());
+  const user = await User.findOne({ verificationToken: hashedInput }).select("+verificationToken");
 
-  const cleanEmail = email.toLowerCase().trim();
+  if (!user) throw ApiError.badRequest("Invalid or expired verification token");
 
-  const result = await pool.query(
-    `SELECT id, name, email, password, created_at
-     FROM users
-     WHERE email = $1`,
-    [cleanEmail]
-  );
+  await User.findByIdAndUpdate(user._id, {
+    $set: { isVerified: true },
+    $unset: { verificationToken: 1 },
+  });
 
-  if (result.rows.length === 0) {
-    throw ApiError.unauthorized("Invalid email or password");
-  }
-
-  const user = result.rows[0];
-
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch) {
-    throw ApiError.unauthorized("Invalid email or password");
-  }
-
-  const token = generateToken({ id: user.id, name: user.name, email: user.email });
-
-  return {
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      created_at: user.created_at,
-    },
-    token,
-  };
+  return true;
 };
 
-// 3. Forgot Password (generates reset_token and 15-minute expiry)
+export const login = async ({ email, password }) => {
+  const user = await User.findOne({ email }).select("+password");
+  if (!user) throw ApiError.unauthorized("Invalid email or password");
+
+  const isMatch = await user.comparePassword(password);
+  if (!isMatch) throw ApiError.unauthorized("Invalid email or password");
+
+  const accessToken = generateAccessToken({ id: user._id, role: user.role });
+  const refreshToken = generateRefreshToken({ id: user._id });
+
+  user.refreshToken = hashToken(refreshToken);
+  await user.save({ validateBeforeSave: false });
+
+  const userObj = user.toObject();
+  delete userObj.password;
+  delete userObj.refreshToken;
+
+  return { user: userObj, accessToken, refreshToken };
+};
+
+export const refresh = async (token) => {
+  if (!token) throw ApiError.unauthorized("Refresh token is required");
+
+  let decoded;
+  try {
+    decoded = verifyRefreshToken(token);
+  } catch (err) {
+    throw ApiError.unauthorized("Invalid or expired refresh token");
+  }
+
+  const user = await User.findById(decoded.id).select("+refreshToken");
+  if (!user || user.refreshToken !== hashToken(token)) {
+    throw ApiError.unauthorized("Invalid refresh token. Please log in again.");
+  }
+
+  const accessToken = generateAccessToken({ id: user._id, role: user.role });
+  return { accessToken };
+};
+
+export const logout = async (userId) => {
+  await User.findByIdAndUpdate(userId, { $unset: { refreshToken: 1 } });
+};
+
 export const forgotPassword = async (email) => {
-  if (!email) {
-    throw ApiError.badRequest("Email is required");
+  const user = await User.findOne({ email });
+  if (!user) throw ApiError.notFound("No account with that email");
+
+  const { rawToken, hashedToken } = generateResetToken();
+  user.resetPasswordToken = hashedToken;
+  user.resetPasswordExpires = Date.now() + 15 * 60 * 1000;
+  await user.save({ validateBeforeSave: false });
+
+  try {
+    await sendResetPasswordEmail(email, rawToken);
+  } catch (err) {
+    console.error("Failed to send reset email:", err.message);
   }
-
-  const cleanEmail = email.toLowerCase().trim();
-  const rawToken = crypto.randomBytes(20).toString("hex");
-
-  const result = await pool.query(
-    `UPDATE users
-     SET reset_token = $1, reset_token_expires_at = NOW() + INTERVAL '15 minutes', updated_at = NOW()
-     WHERE email = $2
-     RETURNING id, email`,
-    [rawToken, cleanEmail]
-  );
-
-  if (result.rows.length === 0) {
-    throw ApiError.notFound("No account found with that email");
-  }
-
-  return {
-    message: "Password reset token generated (valid for 15 minutes)",
-    resetToken: rawToken,
-  };
 };
 
-// 4. Reset Password using token
-export const resetPassword = async ({ token, newPassword }) => {
-  if (!token || !newPassword) {
-    throw ApiError.badRequest("Token and new password are required");
-  }
+export const resetPassword = async (token, newPassword) => {
+  const hashedToken = hashToken(token);
+  const user = await User.findOne({
+    resetPasswordToken: hashedToken,
+    resetPasswordExpires: { $gt: Date.now() },
+  }).select("+resetPasswordToken +resetPasswordExpires");
 
-  if (newPassword.length < 6) {
-    throw ApiError.badRequest("New password must be at least 6 characters long");
-  }
+  if (!user) throw ApiError.badRequest("Invalid or expired reset token");
 
-  // Verify token is valid and not expired
-  const result = await pool.query(
-    `SELECT id FROM users
-     WHERE reset_token = $1 AND reset_token_expires_at > NOW()`,
-    [token]
-  );
-
-  if (result.rows.length === 0) {
-    throw ApiError.badRequest("Invalid or expired reset token");
-  }
-
-  const userId = result.rows[0].id;
-  const passwordHash = await bcrypt.hash(newPassword, 12);
-
-  await pool.query(
-    `UPDATE users
-     SET password = $1, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW()
-     WHERE id = $2`,
-    [passwordHash, userId]
-  );
-
-  return { message: "Password reset successful. Please log in with your new password." };
+  user.password = newPassword;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpires = undefined;
+  await user.save();
 };
 
-// 5. Get current profile
 export const getMe = async (userId) => {
-  const result = await pool.query(
-    "SELECT id, name, email, created_at FROM users WHERE id = $1",
-    [userId]
-  );
-  if (result.rows.length === 0) {
-    throw ApiError.notFound("User not found");
-  }
-  return result.rows[0];
+  const user = await User.findById(userId);
+  if (!user) throw ApiError.notFound("User not found");
+  return user;
 };

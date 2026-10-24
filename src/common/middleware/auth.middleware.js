@@ -1,6 +1,6 @@
 ﻿import ApiError from "../utils/api-error.js";
-import { verifyToken } from "../utils/jwt.js";
-import pool from "../config/db.js";
+import { verifyAccessToken } from "../utils/jwt.utils.js";
+import User from "../../modules/auth/auth.model.js";
 
 export const authenticate = async (req, res, next) => {
   try {
@@ -15,19 +15,16 @@ export const authenticate = async (req, res, next) => {
       throw ApiError.unauthorized("Authentication token required");
     }
 
-    const decoded = verifyToken(token);
+    const decoded = verifyAccessToken(token);
 
-    // Verify user exists in PostgreSQL
-    const result = await pool.query(
-      "SELECT id, name, email, role FROM users WHERE id = $1",
-      [decoded.id]
-    );
+    // Verify user exists in MongoDB Atlas
+    const user = await User.findById(decoded.id);
 
-    if (result.rows.length === 0) {
+    if (!user) {
       throw ApiError.unauthorized("User account no longer exists");
     }
 
-    req.user = result.rows[0];
+    req.user = user;
     next();
   } catch (error) {
     if (error.name === "JsonWebTokenError" || error.name === "TokenExpiredError") {

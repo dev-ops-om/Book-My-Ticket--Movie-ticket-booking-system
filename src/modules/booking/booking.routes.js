@@ -9,9 +9,7 @@ router.get("/", controller.serveIndexHtml);
 router.get("/seats", controller.getSeats);
 router.put("/:id/:name", controller.legacyBookSeat);
 
-// Feature routes
-router.get("/api/movies", controller.getMovies);
+// Protected booking endpoint
 router.post("/api/bookings", authenticate, controller.bookSeat);
-router.get("/api/bookings/my-bookings", authenticate, controller.getMyBookings);
 
 export default router;
